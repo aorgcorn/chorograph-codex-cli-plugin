@@ -75,12 +75,22 @@ gh release create "${TAG}" "${ASSET}" \
     --notes "Release ${TAG}"
 
 # ── Hash what GitHub actually serves ─────────────────────────────────────────
-# GitHub re-compresses uploaded zips, so the SHA256 of the served file differs
-# from the local zip. Always fetch back and hash the live asset.
+# GitHub re-compresses uploaded zips, and the CDN may serve a transitional
+# copy on the first request. Fetch twice and keep re-trying until two
+# consecutive fetches produce the same hash — that's the stable canonical hash.
 echo "Fetching published asset to compute canonical SHA256..."
 VERIFIED_ZIP=$(mktemp /tmp/${NAME}-verify-XXXXXX.zip)
-curl -L -s -o "${VERIFIED_ZIP}" "${DOWNLOAD_URL}"
-SHA=$(shasum -a 256 "${VERIFIED_ZIP}" | awk '{print $1}')
+PREV_SHA=""
+SHA=""
+for i in 1 2 3 4 5; do
+    sleep 3
+    curl -L -s -o "${VERIFIED_ZIP}" "${DOWNLOAD_URL}"
+    SHA=$(shasum -a 256 "${VERIFIED_ZIP}" | awk '{print $1}')
+    if [ "${SHA}" = "${PREV_SHA}" ]; then
+        break
+    fi
+    PREV_SHA="${SHA}"
+done
 rm -f "${VERIFIED_ZIP}"
 
 echo ""
