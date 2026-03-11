@@ -24,10 +24,16 @@ mkdir -p "${BUNDLE}/Contents/MacOS"
 # Plugin dylib (renamed to match CFBundleExecutable)
 cp "${BUILD_DIR}/lib${NAME}.dylib" "${BUNDLE}/Contents/MacOS/${NAME}"
 
-# SDK dylib — must live next to the plugin binary so @loader_path rpath resolves.
-# dyld caches by install name, so if the host already loaded the SDK the plugin
-# will reuse that image; this copy is only needed as a fallback.
-cp "${BUILD_DIR}/libChorographPluginSDK.dylib" "${BUNDLE}/Contents/MacOS/"
+# Do NOT bundle the SDK dylib. dyld deduplicates loaded images by resolved
+# absolute path, not install name — shipping a second copy causes Swift type
+# identity checks (e.g. `as? any ChorographPlugin`) to fail across the dlopen
+# boundary because two distinct images end up in the process.
+#
+# Instead, point the plugin binary at the same SDK the host already has loaded:
+#   • @executable_path/../Frameworks  — proper .app bundle layout
+#   • @executable_path                — SPM / swift run layout (.build/debug/)
+install_name_tool -add_rpath "@executable_path/../Frameworks" "${BUNDLE}/Contents/MacOS/${NAME}"
+install_name_tool -add_rpath "@executable_path"                "${BUNDLE}/Contents/MacOS/${NAME}"
 
 cat > "${BUNDLE}/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
