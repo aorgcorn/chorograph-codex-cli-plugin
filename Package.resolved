@@ -1,0 +1,14 @@
+{
+  "pins" : [
+    {
+      "identity" : "chorograph-plugin-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/aorgcorn/chorograph-plugin-sdk.git",
+      "state" : {
+        "revision" : "00919386118a575c1f970d170676ed28d2ed8f35",
+        "version" : "1.0.1"
+      }
+    }
+  ],
+  "version" : 2
+}
