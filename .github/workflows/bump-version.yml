@@ -1,0 +1,118 @@
+name: Bump Version
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  bump:
+    # Skip the commit that this workflow itself creates.
+    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      PLUGIN_SWIFT: Sources/ChorographCodexCLIPlugin/Plugin.swift
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine bump level from conventional commits
+        id: bump
+        run: |
+          # Find the last vX.Y.Z tag reachable from HEAD.
+          LAST_TAG=$(git describe --tags --match "v*" --abbrev=0 2>/dev/null || echo "")
+
+          if [ -z "$LAST_TAG" ]; then
+            COMMITS=$(git log --format="%s" HEAD)
+          else
+            COMMITS=$(git log --format="%s" "${LAST_TAG}..HEAD")
+          fi
+
+          echo "Commits since ${LAST_TAG:-<none>}:"
+          echo "$COMMITS"
+
+          LEVEL="none"
+          while IFS= read -r msg; do
+            # BREAKING CHANGE footer or ! modifier → major
+            if echo "$msg" | grep -qE '^(feat|fix|refactor|perf|chore|docs|style|test|build|ci)(\(.+\))?!:' || \
+               echo "$msg" | grep -qE 'BREAKING[- ]CHANGE'; then
+              LEVEL="major"
+              break
+            fi
+            # feat → minor (only upgrade if not already major)
+            if echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
+              LEVEL="minor"
+            fi
+            # fix / perf / refactor → patch (only upgrade if none)
+            if [ "$LEVEL" = "none" ] && echo "$msg" | grep -qE '^(fix|perf|refactor)(\(.+\))?:'; then
+              LEVEL="patch"
+            fi
+          done <<< "$COMMITS"
+
+          echo "Bump level: $LEVEL"
+          echo "level=$LEVEL" >> "$GITHUB_OUTPUT"
+          echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if no releasable commits
+        if: steps.bump.outputs.level == 'none'
+        run: |
+          echo "No feat/fix/perf/refactor commits found — skipping release."
+          exit 0
+
+      - name: Calculate new version
+        id: version
+        if: steps.bump.outputs.level != 'none'
+        run: |
+          LAST_TAG="${{ steps.bump.outputs.last_tag }}"
+          LEVEL="${{ steps.bump.outputs.level }}"
+
+          if [ -z "$LAST_TAG" ]; then
+            CURRENT="0.0.0"
+          else
+            CURRENT="${LAST_TAG#v}"
+          fi
+
+          MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+          MINOR=$(echo "$CURRENT" | cut -d. -f2)
+          PATCH=$(echo "$CURRENT" | cut -d. -f3)
+
+          case "$LEVEL" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "New version: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Update version.txt
+        if: steps.bump.outputs.level != 'none'
+        run: echo "${{ steps.version.outputs.new_version }}" > version.txt
+
+      - name: Update version in Plugin.swift
+        if: steps.bump.outputs.level != 'none'
+        run: |
+          sed -i "s/version: \"[0-9]*\.[0-9]*\.[0-9]*\"/version: \"${{ steps.version.outputs.new_version }}\"/" \
+            "${{ env.PLUGIN_SWIFT }}"
+
+      - name: Commit and tag
+        if: steps.bump.outputs.level != 'none'
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          git add version.txt "${{ env.PLUGIN_SWIFT }}"
+          git commit -m "chore(release): bump version to ${NEW_VERSION}"
+          git tag "v${NEW_VERSION}"
+          git push origin HEAD
+          git push origin "v${NEW_VERSION}"
