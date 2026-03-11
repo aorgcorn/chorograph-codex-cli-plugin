@@ -18,32 +18,45 @@ jobs:
       - name: Build release
         run: swift build -c release
 
-      - name: Locate .bundle product
-        id: find_bundle
+      - name: Package bundle
+        id: package
         run: |
-          BUNDLE=$(find .build/release -name "*.bundle" -maxdepth 1 | head -1)
-          echo "bundle_path=$BUNDLE" >> "$GITHUB_OUTPUT"
-          echo "bundle_name=$(basename $BUNDLE)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          PLUGIN_NAME="ChorographCodexCLIPlugin"
+          DYLIB=".build/release/lib${PLUGIN_NAME}.dylib"
+          BUNDLE_DIR="${PLUGIN_NAME}.bundle"
+          ZIP_NAME="${BUNDLE_DIR}.zip"
 
-      - name: Zip bundle
-        run: |
-          cd "$(dirname "${{ steps.find_bundle.outputs.bundle_path }}")"
-          zip -r "${{ steps.find_bundle.outputs.bundle_name }}.zip" "${{ steps.find_bundle.outputs.bundle_name }}"
-          echo "zip_path=$(pwd)/${{ steps.find_bundle.outputs.bundle_name }}.zip" >> "$GITHUB_OUTPUT"
-        id: zip
+          mkdir -p "${BUNDLE_DIR}/Contents/MacOS"
+          cp "${DYLIB}" "${BUNDLE_DIR}/Contents/MacOS/${PLUGIN_NAME}"
 
-      - name: Compute SHA-256
-        id: sha
-        run: |
-          CHECKSUM=$(shasum -a 256 "${{ steps.zip.outputs.zip_path }}" | awk '{print $1}')
-          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          cat > "${BUNDLE_DIR}/Contents/Info.plist" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>ChorographCodexCLIPlugin</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.aorgcorn.chorograph.plugin.codex-cli</string>
+              <key>CFBundlePackageType</key>
+              <string>BNDL</string>
+          </dict>
+          </plist>
+          PLIST
+
+          zip -r "${ZIP_NAME}" "${BUNDLE_DIR}"
+
+          CHECKSUM=$(shasum -a 256 "${ZIP_NAME}" | awk '{print $1}')
+          echo "zip_name=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
+          echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.zip.outputs.zip_path }}
+          files: ${{ steps.package.outputs.zip_name }}
           body: |
             ## SHA-256
-            `${{ steps.sha.outputs.checksum }}`
+            `${{ steps.package.outputs.checksum }}`
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
