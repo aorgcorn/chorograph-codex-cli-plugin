@@ -19,9 +19,7 @@ public final class CodexCLIPlugin: ChorographPlugin, @unchecked Sendable {
 
     public func bootstrap(context: any PluginContextProviding) async throws {
         context.registerProvider(CodexCLIProvider())
-        context.registerSettingsPanel(title: "Codex CLI") {
-            CodexCLISettingsView()
-        }
+        context.registerSettingsPanel(title: "Codex CLI", AnyView(CodexCLISettingsView()))
     }
 }
 
