@@ -8,7 +8,7 @@ import SwiftUI
 public final class CodexCLIPlugin: ChorographPlugin, @unchecked Sendable {
 
     public let manifest = PluginManifest(
-        id: "com.chorograph.codex-cli",
+        id: "com.chorograph.plugin.codex-cli",
         displayName: "Codex CLI",
         description: "Drives the OpenAI Codex CLI subprocess and streams JSONL events.",
         version: "1.0.0",
@@ -25,8 +25,8 @@ public final class CodexCLIPlugin: ChorographPlugin, @unchecked Sendable {
 
 // MARK: - C-ABI factory (required for dlopen-based loading)
 
-@_cdecl("chorographPluginFactory")
-public func chorographPluginFactory() -> UnsafeMutableRawPointer {
+@_cdecl("chorograph_plugin_create")
+public func chorographPluginCreate() -> UnsafeMutableRawPointer {
     let plugin = CodexCLIPlugin()
     return Unmanaged.passRetained(plugin as AnyObject).toOpaque()
 }
