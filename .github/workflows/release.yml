@@ -32,6 +32,15 @@ jobs:
           mkdir -p "${BUNDLE_DIR}/Contents/MacOS"
           cp "${DYLIB}" "${BUNDLE_DIR}/Contents/MacOS/${PLUGIN_NAME}"
 
+          # Fix the dylib install name. SPM sets it to @rpath/lib<Name>.dylib,
+          # but the binary lives at Contents/MacOS/<Name> (no lib prefix, no
+          # .dylib extension). Rewrite the install name to @rpath/<Name> so
+          # the self-referential rpath dependency resolves correctly at dlopen
+          # time regardless of where the bundle is placed on the user's system.
+          install_name_tool -id \
+            "@rpath/${PLUGIN_NAME}" \
+            "${BUNDLE_DIR}/Contents/MacOS/${PLUGIN_NAME}"
+
           cat > "${BUNDLE_DIR}/Contents/Info.plist" << 'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
