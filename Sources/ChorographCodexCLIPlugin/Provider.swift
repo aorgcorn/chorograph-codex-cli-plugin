@@ -190,7 +190,7 @@ actor CodexCLIProvider: AIProvider {
         let outputStream = AsyncStream<Data> { cont in outCont = cont }
         let errorStream  = AsyncStream<Data> { cont in errCont = cont }
 
-        pipe.fileHandleForReading.readabilityHandler = { handle in
+        pipe.fileHandleForReading.readabilityHandler = { [outCont] handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
@@ -200,7 +200,7 @@ actor CodexCLIProvider: AIProvider {
             }
         }
 
-        errPipe.fileHandleForReading.readabilityHandler = { handle in
+        errPipe.fileHandleForReading.readabilityHandler = { [errCont] handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
@@ -210,7 +210,7 @@ actor CodexCLIProvider: AIProvider {
             }
         }
 
-        process.terminationHandler = { _ in
+        process.terminationHandler = { [outCont, errCont] _ in
             outCont?.finish()
             errCont?.finish()
         }
