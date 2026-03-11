@@ -22,6 +22,14 @@ let package = Package(
             name: "ChorographCodexCLIPlugin",
             dependencies: [
                 .product(name: "ChorographPluginSDK", package: "chorograph-plugin-sdk"),
+            ],
+            linkerSettings: [
+                // Ensure the plugin resolves libChorographPluginSDK.dylib from
+                // the host process rather than a bundled copy.
+                // @executable_path/../Frameworks — proper .app bundle layout
+                // @executable_path              — SPM / swift run (.build/debug/)
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path"]),
             ]
         ),
     ]
