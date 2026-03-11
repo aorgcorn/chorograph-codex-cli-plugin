@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build release
+        run: swift build -c release
+
+      - name: Locate .bundle product
+        id: find_bundle
+        run: |
+          BUNDLE=$(find .build/release -name "*.bundle" -maxdepth 1 | head -1)
+          echo "bundle_path=$BUNDLE" >> "$GITHUB_OUTPUT"
+          echo "bundle_name=$(basename $BUNDLE)" >> "$GITHUB_OUTPUT"
+
+      - name: Zip bundle
+        run: |
+          cd "$(dirname "${{ steps.find_bundle.outputs.bundle_path }}")"
+          zip -r "${{ steps.find_bundle.outputs.bundle_name }}.zip" "${{ steps.find_bundle.outputs.bundle_name }}"
+          echo "zip_path=$(pwd)/${{ steps.find_bundle.outputs.bundle_name }}.zip" >> "$GITHUB_OUTPUT"
+        id: zip
+
+      - name: Compute SHA-256
+        id: sha
+        run: |
+          CHECKSUM=$(shasum -a 256 "${{ steps.zip.outputs.zip_path }}" | awk '{print $1}')
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.zip.outputs.zip_path }}
+          body: |
+            ## SHA-256
+            `${{ steps.sha.outputs.checksum }}`
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
