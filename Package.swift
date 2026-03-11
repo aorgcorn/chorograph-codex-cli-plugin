@@ -13,7 +13,7 @@ let package = Package(
     ],
     dependencies: [
         .package(
-            url: "https://github.com/chorograph/chorograph.git",
+            url: "https://github.com/aorgcorn/chorograph-plugin-sdk.git",
             from: "1.0.0"
         ),
     ],
@@ -21,7 +21,7 @@ let package = Package(
         .target(
             name: "ChorographCodexCLIPlugin",
             dependencies: [
-                .product(name: "ChorographPluginSDK", package: "chorograph"),
+                .product(name: "ChorographPluginSDK", package: "chorograph-plugin-sdk"),
             ]
         ),
     ]
