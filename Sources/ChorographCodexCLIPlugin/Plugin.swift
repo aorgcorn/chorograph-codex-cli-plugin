@@ -11,7 +11,7 @@ public final class CodexCLIPlugin: ChorographPlugin, @unchecked Sendable {
         id: "com.chorograph.plugin.codex-cli",
         displayName: "Codex CLI",
         description: "Drives the OpenAI Codex CLI subprocess and streams JSONL events.",
-        version: "1.0.5",
+        version: "1.0.6",
         capabilities: [.aiProvider, .settingsPanel]
     )
 
