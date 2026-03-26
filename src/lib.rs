@@ -12,16 +12,19 @@ impl CodexCLI {
                 for skel in skeletons {
                     if let (Some(path), Some(symbols)) = (
                         skel.get("path").and_then(|p| p.as_str()),
-                        skel.get("symbols").and_then(|s| s.as_array())
+                        skel.get("symbols").and_then(|s| s.as_array()),
                     ) {
                         context.push_str(&format!("\nFile: `{}`\n", path));
                         for sym in symbols {
                             if let (Some(name), Some(kind), Some(line)) = (
                                 sym.get("name").and_then(|n| n.as_str()),
                                 sym.get("kind").and_then(|k| k.as_str()),
-                                sym.get("line").and_then(|l| l.as_u64())
+                                sym.get("line").and_then(|l| l.as_u64()),
                             ) {
-                                context.push_str(&format!("  - {} `{}` (line {})\n", kind, name, line));
+                                context.push_str(&format!(
+                                    "  - {} `{}` (line {})\n",
+                                    kind, name, line
+                                ));
                             }
                         }
                     }
@@ -33,10 +36,17 @@ impl CodexCLI {
 }
 
 impl AIProvider for CodexCLI {
-    fn id(&self) -> String { "codex-cli".to_string() }
-    fn display_name(&self) -> String { "Codex CLI (Rust)".to_string() }
+    fn id(&self) -> String {
+        "codex-cli".to_string()
+    }
+    fn display_name(&self) -> String {
+        "Codex CLI (Rust)".to_string()
+    }
     fn get_models(&self) -> Vec<ModelInfo> {
-        vec![ModelInfo { id: "default".to_string(), name: "Default Model".to_string() }]
+        vec![ModelInfo {
+            id: "default".to_string(),
+            name: "Default Model".to_string(),
+        }]
     }
 
     fn send_message(&self, session_id: &str, text: &str) -> Result<()> {
@@ -48,10 +58,10 @@ impl AIProvider for CodexCLI {
                 "--json",
                 "--dangerously-bypass-approvals-and-sandbox",
                 "--skip-git-repo-check",
-                text
+                text,
             ],
             None,
-            std::collections::HashMap::new()
+            std::collections::HashMap::new(),
         )?;
 
         let mut buffer = Vec::new();
@@ -60,7 +70,12 @@ impl AIProvider for CodexCLI {
                 if !err_data.is_empty() {
                     let err_msg = String::from_utf8_lossy(&err_data);
                     log!("[Codex Plugin] Stderr: {}", err_msg);
-                    push_ai_event(session_id, &AIEvent::Error { message: err_msg.to_string() });
+                    push_ai_event(
+                        session_id,
+                        &AIEvent::Error {
+                            message: err_msg.to_string(),
+                        },
+                    );
                 }
             }
 
@@ -71,33 +86,51 @@ impl AIProvider for CodexCLI {
                     while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
                         let line = buffer.drain(..=pos).collect::<Vec<_>>();
                         if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&line) {
+                            // command_execution items are intercepted by chorograph-shim at the
+                            // bash level and streamed line-by-line via the Unix socket — no need
+                            // to forward them here.
                             if val.get("type") == Some(&json!("item.completed")) {
                                 if let Some(item) = val.get("item") {
                                     let item_type = item.get("type").and_then(|t| t.as_str());
                                     if item_type == Some("agent_message") {
-                                        if let Some(msg) = item.get("text").and_then(|t| t.as_str()) {
-                                            push_ai_event(session_id, &AIEvent::AssistantReply {
-                                                session_id: session_id.to_string(),
-                                                text: msg.to_string(),
-                                            });
+                                        if let Some(msg) = item.get("text").and_then(|t| t.as_str())
+                                        {
+                                            push_ai_event(
+                                                session_id,
+                                                &AIEvent::AssistantReply {
+                                                    session_id: session_id.to_string(),
+                                                    text: msg.to_string(),
+                                                },
+                                            );
                                         }
                                     } else if item_type == Some("reasoning") {
-                                        if let Some(msg) = item.get("text").and_then(|t| t.as_str()) {
+                                        if let Some(msg) = item.get("text").and_then(|t| t.as_str())
+                                        {
                                             // Send as proper Reasoning event for in-place replacement in UI
-                                            push_ai_event(session_id, &AIEvent::Reasoning {
-                                                session_id: session_id.to_string(),
-                                                text: msg.trim_matches('*').trim().to_string(),
-                                            });
+                                            push_ai_event(
+                                                session_id,
+                                                &AIEvent::Reasoning {
+                                                    session_id: session_id.to_string(),
+                                                    text: msg.trim_matches('*').trim().to_string(),
+                                                },
+                                            );
                                         }
                                     }
                                 }
                             }
                             if val.get("type") == Some(&json!("item.delta")) {
-                                if let Some(delta) = val.get("delta").and_then(|d| d.get("text")).and_then(|t| t.as_str()) {
-                                    push_ai_event(session_id, &AIEvent::StreamingDelta {
-                                        session_id: session_id.to_string(),
-                                        text: delta.to_string(),
-                                    });
+                                if let Some(delta) = val
+                                    .get("delta")
+                                    .and_then(|d| d.get("text"))
+                                    .and_then(|t| t.as_str())
+                                {
+                                    push_ai_event(
+                                        session_id,
+                                        &AIEvent::StreamingDelta {
+                                            session_id: session_id.to_string(),
+                                            text: delta.to_string(),
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -106,15 +139,18 @@ impl AIProvider for CodexCLI {
                 ReadResult::EOF => {
                     log!("[Codex Plugin] Stdout EOF reached");
                     break;
-                },
+                }
                 ReadResult::Empty => continue,
             }
         }
 
         log!("[Codex Plugin] Turn completed");
-        push_ai_event(session_id, &AIEvent::TurnCompleted {
-            session_id: session_id.to_string(),
-        });
+        push_ai_event(
+            session_id,
+            &AIEvent::TurnCompleted {
+                session_id: session_id.to_string(),
+            },
+        );
 
         Ok(())
     }
@@ -122,8 +158,12 @@ impl AIProvider for CodexCLI {
 
 impl CodexCLI {
     fn send_plan(&self, session_id: &str, text: &str) -> Result<()> {
-        log!("[Codex Plugin] send_plan session={} prompt={}", session_id, text);
-        
+        log!(
+            "[Codex Plugin] send_plan session={} prompt={}",
+            session_id,
+            text
+        );
+
         let plan_prompt = format!(
             "Analyze the task: {}. \n\n\
             Respond in two clear parts:\n\
@@ -138,8 +178,13 @@ impl CodexCLI {
             [\"file1.swift\", \"file2.swift\"]", 
             text
         );
-        
-        push_ai_event(session_id, &AIEvent::Info { message: "Generating plan via Codex...".to_string() });
+
+        push_ai_event(
+            session_id,
+            &AIEvent::Info {
+                message: "Generating plan via Codex...".to_string(),
+            },
+        );
 
         let child = ChildProcess::spawn(
             "codex",
@@ -148,10 +193,10 @@ impl CodexCLI {
                 "--json",
                 "--dangerously-bypass-approvals-and-sandbox",
                 "--skip-git-repo-check",
-                &plan_prompt
+                &plan_prompt,
             ],
             None,
-            std::collections::HashMap::new()
+            std::collections::HashMap::new(),
         )?;
 
         let mut buffer = Vec::new();
@@ -173,24 +218,37 @@ impl CodexCLI {
                     while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
                         let line = buffer.drain(..=pos).collect::<Vec<_>>();
                         if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&line) {
-                            if val.get("type") == Some(&json!("item.completed")) {
+                            let event_type = val.get("type").and_then(|t| t.as_str());
+
+                            // command_execution items are intercepted by chorograph-shim at the
+                            // bash level and streamed line-by-line via the Unix socket — no need
+                            // to forward them here.
+                            if event_type == Some("item.completed") {
                                 if let Some(item) = val.get("item") {
                                     let item_type = item.get("type").and_then(|t| t.as_str());
                                     if item_type == Some("agent_message") {
-                                        if let Some(msg) = item.get("text").and_then(|t| t.as_str()) {
+                                        if let Some(msg) = item.get("text").and_then(|t| t.as_str())
+                                        {
                                             full_response.push_str(msg);
-                                            push_ai_event(session_id, &AIEvent::StreamingDelta {
-                                                session_id: session_id.to_string(),
-                                                text: msg.to_string(),
-                                            });
+                                            push_ai_event(
+                                                session_id,
+                                                &AIEvent::StreamingDelta {
+                                                    session_id: session_id.to_string(),
+                                                    text: msg.to_string(),
+                                                },
+                                            );
                                         }
                                     } else if item_type == Some("reasoning") {
-                                        if let Some(msg) = item.get("text").and_then(|t| t.as_str()) {
+                                        if let Some(msg) = item.get("text").and_then(|t| t.as_str())
+                                        {
                                             // Send as proper Reasoning event for in-place replacement in UI
-                                            push_ai_event(session_id, &AIEvent::Reasoning {
-                                                session_id: session_id.to_string(),
-                                                text: msg.trim_matches('*').trim().to_string(),
-                                            });
+                                            push_ai_event(
+                                                session_id,
+                                                &AIEvent::Reasoning {
+                                                    session_id: session_id.to_string(),
+                                                    text: msg.trim_matches('*').trim().to_string(),
+                                                },
+                                            );
                                         }
                                     }
                                 }
@@ -201,27 +259,41 @@ impl CodexCLI {
                 ReadResult::EOF => {
                     log!("[Codex Plugin] Plan Stdout EOF");
                     break;
-                },
+                }
                 ReadResult::Empty => continue,
             }
         }
 
-        log!("[Codex Plugin] Plan extraction. Response len: {}", full_response.len());
+        log!(
+            "[Codex Plugin] Plan extraction. Response len: {}",
+            full_response.len()
+        );
         let files = self.extract_files(&full_response);
         log!("[Codex Plugin] Extracted {} files", files.len());
         if !files.is_empty() {
-            push_ai_event(session_id, &AIEvent::PlanGenerated {
-                session_id: session_id.to_string(),
-                files,
-            });
+            push_ai_event(
+                session_id,
+                &AIEvent::PlanGenerated {
+                    session_id: session_id.to_string(),
+                    files,
+                },
+            );
         } else {
             log!("[Codex Plugin] Warning: No files extracted from plan response");
-            push_ai_event(session_id, &AIEvent::Info { message: "No files identified in the plan.".to_string() });
+            push_ai_event(
+                session_id,
+                &AIEvent::Info {
+                    message: "No files identified in the plan.".to_string(),
+                },
+            );
         }
 
-        push_ai_event(session_id, &AIEvent::TurnCompleted {
-            session_id: session_id.to_string(),
-        });
+        push_ai_event(
+            session_id,
+            &AIEvent::TurnCompleted {
+                session_id: session_id.to_string(),
+            },
+        );
 
         Ok(())
     }
@@ -237,7 +309,7 @@ impl CodexCLI {
                 }
             }
         }
-        
+
         if let Some(start) = response.find('[') {
             if let Some(end) = response.find(']') {
                 if end > start {
@@ -264,16 +336,20 @@ pub fn init() {
 #[chorograph_plugin]
 pub fn handle_action(action_id: String, payload: serde_json::Value) {
     let provider = CodexCLI;
-    log!("[Codex Plugin] handle_action id={} payload={}", action_id, payload);
-    
+    log!(
+        "[Codex Plugin] handle_action id={} payload={}",
+        action_id,
+        payload
+    );
+
     let context = provider.format_skeletons(&payload);
-    
+
     if action_id == "send_test" {
         let _ = provider.send_message("test-session", "echo Ported to Rust WASM!");
     } else if action_id == "plan" {
         if let (Some(session_id), Some(prompt)) = (
             payload.get("session_id").and_then(|s| s.as_str()),
-            payload.get("prompt").and_then(|p| p.as_str())
+            payload.get("prompt").and_then(|p| p.as_str()),
         ) {
             let final_prompt = format!("{}{}", prompt, context);
             let _ = provider.send_plan(session_id, &final_prompt);
@@ -281,10 +357,32 @@ pub fn handle_action(action_id: String, payload: serde_json::Value) {
     } else if action_id == "engage" {
         if let (Some(session_id), Some(prompt)) = (
             payload.get("session_id").and_then(|s| s.as_str()),
-            payload.get("prompt").and_then(|p| p.as_str())
+            payload.get("prompt").and_then(|p| p.as_str()),
         ) {
             let final_prompt = format!("{}{}", prompt, context);
             let _ = provider.send_message(session_id, &final_prompt);
+        }
+    } else if action_id == "chat" || action_id == "reply" {
+        // New conversation protocol: payload carries a `messages` array and optional `skeletons`.
+        // Extract the last user message as the prompt to send to codex.
+        if let Some(session_id) = payload.get("session_id").and_then(|s| s.as_str()) {
+            let last_user_text = payload
+                .get("messages")
+                .and_then(|m| m.as_array())
+                .and_then(|msgs| {
+                    msgs.iter()
+                        .rev()
+                        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                })
+                .and_then(|m| m.get("text").and_then(|t| t.as_str()))
+                .unwrap_or("");
+
+            if !last_user_text.is_empty() {
+                let final_prompt = format!("{}{}", last_user_text, context);
+                let _ = provider.send_message(session_id, &final_prompt);
+            } else {
+                log!("[Codex Plugin] chat/reply: no user message found in payload");
+            }
         }
     }
 }
