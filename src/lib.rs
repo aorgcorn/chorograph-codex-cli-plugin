@@ -4,6 +4,38 @@ use serde_json::json;
 struct CodexCLI;
 
 impl CodexCLI {
+    /// Formats all messages before the final user turn into a conversation transcript
+    /// so that the CLI has full context when replying. Returns an empty string when
+    /// there is only one message (first-turn / "chat" action — no history yet).
+    fn format_history(&self, messages: &[serde_json::Value]) -> String {
+        // Drop the last message (the new user prompt — already included in the prompt itself).
+        let prior: Vec<&serde_json::Value> = messages
+            .iter()
+            .rev()
+            .skip(1) // skip the final user message
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+
+        if prior.is_empty() {
+            return String::new();
+        }
+
+        let mut history = String::from("\n\n### Conversation History (most recent context):\n");
+        for msg in &prior {
+            let role = msg
+                .get("role")
+                .and_then(|r| r.as_str())
+                .unwrap_or("unknown");
+            let text = msg.get("text").and_then(|t| t.as_str()).unwrap_or("");
+            let label = if role == "user" { "User" } else { "Assistant" };
+            history.push_str(&format!("\n**{}:** {}\n", label, text));
+        }
+        history.push_str("\n---\nContinue the conversation based on the history above.\n");
+        history
+    }
+
     fn format_skeletons(&self, payload: &serde_json::Value) -> String {
         let mut context = String::new();
         if let Some(skeletons) = payload.get("skeletons").and_then(|s| s.as_array()) {
@@ -364,21 +396,31 @@ pub fn handle_action(action_id: String, payload: serde_json::Value) {
         }
     } else if action_id == "chat" || action_id == "reply" {
         // New conversation protocol: payload carries a `messages` array and optional `skeletons`.
-        // Extract the last user message as the prompt to send to codex.
+        // For "reply" (follow-up turn) we prepend the full conversation history so the model
+        // has context of what was already said and done.
         if let Some(session_id) = payload.get("session_id").and_then(|s| s.as_str()) {
-            let last_user_text = payload
+            let messages = payload
                 .get("messages")
                 .and_then(|m| m.as_array())
-                .and_then(|msgs| {
-                    msgs.iter()
-                        .rev()
-                        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-                })
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+
+            let last_user_text = messages
+                .iter()
+                .rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
                 .and_then(|m| m.get("text").and_then(|t| t.as_str()))
                 .unwrap_or("");
 
             if !last_user_text.is_empty() {
-                let final_prompt = format!("{}{}", last_user_text, context);
+                // For follow-up turns, prepend the conversation history so the model
+                // knows what it already said and did.
+                let history = if action_id == "reply" {
+                    provider.format_history(messages)
+                } else {
+                    String::new()
+                };
+                let final_prompt = format!("{}{}{}", last_user_text, history, context);
                 let _ = provider.send_message(session_id, &final_prompt);
             } else {
                 log!("[Codex Plugin] chat/reply: no user message found in payload");
