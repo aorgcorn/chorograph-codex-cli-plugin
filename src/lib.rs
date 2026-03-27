@@ -83,7 +83,7 @@ impl AIProvider for CodexCLI {
 
     fn send_message(&self, session_id: &str, text: &str) -> Result<()> {
         log!("[Codex Plugin] Spawning codex exec for engage: {}", text);
-        let child = ChildProcess::spawn(
+        let child = match ChildProcess::spawn(
             "codex",
             vec![
                 "exec",
@@ -94,7 +94,25 @@ impl AIProvider for CodexCLI {
             ],
             None,
             std::collections::HashMap::new(),
-        )?;
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                log!("[Codex Plugin] Failed to spawn codex: {:?}", e);
+                push_ai_event(
+                    session_id,
+                    &AIEvent::Error {
+                        message: format!("Failed to spawn codex: {:?}", e),
+                    },
+                );
+                push_ai_event(
+                    session_id,
+                    &AIEvent::TurnCompleted {
+                        session_id: session_id.to_string(),
+                    },
+                );
+                return Err(e);
+            }
+        };
 
         let mut buffer = Vec::new();
         while child.wait_for_data(60000) {
@@ -218,7 +236,7 @@ impl CodexCLI {
             },
         );
 
-        let child = ChildProcess::spawn(
+        let child = match ChildProcess::spawn(
             "codex",
             vec![
                 "exec",
@@ -229,7 +247,25 @@ impl CodexCLI {
             ],
             None,
             std::collections::HashMap::new(),
-        )?;
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                log!("[Codex Plugin] Failed to spawn codex for plan: {:?}", e);
+                push_ai_event(
+                    session_id,
+                    &AIEvent::Error {
+                        message: format!("Failed to spawn codex: {:?}", e),
+                    },
+                );
+                push_ai_event(
+                    session_id,
+                    &AIEvent::TurnCompleted {
+                        session_id: session_id.to_string(),
+                    },
+                );
+                return Err(e);
+            }
+        };
 
         let mut buffer = Vec::new();
         let mut full_response = String::new();
