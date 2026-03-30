@@ -338,6 +338,50 @@ impl CodexCLI {
                                                 },
                                             );
                                         }
+                                    } else if item_type == Some("file_change") {
+                                        // During the plan phase, Codex has already written the file
+                                        // to disk. We read it back and emit a CrdtWrite event so the
+                                        // host can capture the content into the CRDT VFS as a
+                                        // speculative (ghost) write that the user can approve or reject.
+                                        if let Some(changes) =
+                                            item.get("changes").and_then(|c| c.as_array())
+                                        {
+                                            for change in changes {
+                                                if let Some(path) =
+                                                    change.get("path").and_then(|p| p.as_str())
+                                                {
+                                                    // Emit a ToolCall so the activity log shows the write
+                                                    push_ai_event(
+                                                        session_id,
+                                                        &AIEvent::ToolCall {
+                                                            name: format!("WRITE {}", path),
+                                                        },
+                                                    );
+                                                    // Read the file Codex just wrote and forward
+                                                    // content to the host CRDT layer
+                                                    match read_host_file(path) {
+                                                        Ok(content) => {
+                                                            push_ai_event(
+                                                                session_id,
+                                                                &AIEvent::CrdtWrite {
+                                                                    session_id: session_id
+                                                                        .to_string(),
+                                                                    path: path.to_string(),
+                                                                    content,
+                                                                },
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            log!(
+                                                                "[Codex Plugin] Failed to read file {} for CrdtWrite: {:?}",
+                                                                path,
+                                                                e
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
