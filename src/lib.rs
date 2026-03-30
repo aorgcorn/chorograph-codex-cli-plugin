@@ -478,21 +478,34 @@ pub fn handle_action(action_id: String, payload: serde_json::Value) {
 
     if action_id == "send_test" {
         let _ = provider.send_message("test-session", "echo Ported to Rust WASM!");
-    } else if action_id == "plan" {
-        if let (Some(session_id), Some(prompt)) = (
-            payload.get("session_id").and_then(|s| s.as_str()),
-            payload.get("prompt").and_then(|p| p.as_str()),
-        ) {
-            let final_prompt = format!("{}{}", prompt, context);
-            let _ = provider.send_plan(session_id, &final_prompt);
-        }
-    } else if action_id == "engage" {
-        if let (Some(session_id), Some(prompt)) = (
-            payload.get("session_id").and_then(|s| s.as_str()),
-            payload.get("prompt").and_then(|p| p.as_str()),
-        ) {
-            let final_prompt = format!("{}{}", prompt, context);
-            let _ = provider.send_message(session_id, &final_prompt);
+    } else if action_id == "plan" || action_id == "engage" {
+        // Both "plan" and "engage" use the messages-array protocol (same as "chat"/"reply").
+        // The old flat "prompt" field is no longer sent by the host.
+        if let Some(session_id) = payload.get("session_id").and_then(|s| s.as_str()) {
+            let messages = payload
+                .get("messages")
+                .and_then(|m| m.as_array())
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+
+            let last_user_text = messages
+                .iter()
+                .rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                .and_then(|m| m.get("text").and_then(|t| t.as_str()))
+                .unwrap_or("");
+
+            if !last_user_text.is_empty() {
+                let history = provider.format_history(messages);
+                let final_prompt = format!("{}{}{}", last_user_text, history, context);
+                if action_id == "plan" {
+                    let _ = provider.send_plan(session_id, &final_prompt);
+                } else {
+                    let _ = provider.send_message(session_id, &final_prompt);
+                }
+            } else {
+                log!("[Codex Plugin] plan/engage: no user message found in payload");
+            }
         }
     } else if action_id == "chat" || action_id == "reply" {
         // New conversation protocol: payload carries a `messages` array and optional `skeletons`.
