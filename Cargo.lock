@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "chorograph-codex-cli-plugin-rust"
-version = "0.2.0"
+version = "1.1.0"
 dependencies = [
  "chorograph-plugin-sdk-rust",
  "serde",
@@ -14,6 +14,7 @@ dependencies = [
 [[package]]
 name = "chorograph-plugin-macros"
 version = "0.1.0"
+source = "git+https://github.com/adevcorn/chorograph-plugin-sdk-rust.git?tag=v0.2.1#0ab8d28aba7912bc18f9999774d434a6a52a4184"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -23,6 +24,7 @@ dependencies = [
 [[package]]
 name = "chorograph-plugin-sdk-rust"
 version = "0.2.0"
+source = "git+https://github.com/adevcorn/chorograph-plugin-sdk-rust.git?tag=v0.2.1#0ab8d28aba7912bc18f9999774d434a6a52a4184"
 dependencies = [
  "chorograph-plugin-macros",
  "serde",
@@ -31,9 +33,9 @@ dependencies = [
 
 [[package]]
 name = "itoa"
-version = "1.0.17"
+version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "memchr"
