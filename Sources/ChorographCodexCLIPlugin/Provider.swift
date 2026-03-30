@@ -325,6 +325,20 @@ actor CodexCLIProvider: AIProvider {
                 continuation?.yield(ToolCallEvent(name: "shell", input: ["command": command]))
             }
 
+        case "file_change":
+            // Codex emits file_change items with a `changes` array of
+            // { "path": "/absolute/path", "kind": "create"|"update"|"delete"|... }
+            // entries. Yield a WriteFileEvent for each so the activity log shows
+            // a WRITE row. The CRDT system is already notified independently via
+            // FSEvents, so no CRDT wiring is needed here.
+            if let changes = item["changes"] as? [[String: Any]] {
+                for change in changes {
+                    if let path = change["path"] as? String {
+                        continuation?.yield(WriteFileEvent(path: path))
+                    }
+                }
+            }
+
         case "reasoning":
             break
 
