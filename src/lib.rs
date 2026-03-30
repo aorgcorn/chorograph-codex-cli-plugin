@@ -165,6 +165,26 @@ impl AIProvider for CodexCLI {
                                                 },
                                             );
                                         }
+                                    } else if item_type == Some("file_change") {
+                                        // Codex emits file_change items when it writes files.
+                                        // Emit a WRITE tool-call event for each changed path so
+                                        // the activity log shows a green WRITE row.
+                                        if let Some(changes) =
+                                            item.get("changes").and_then(|c| c.as_array())
+                                        {
+                                            for change in changes {
+                                                if let Some(path) =
+                                                    change.get("path").and_then(|p| p.as_str())
+                                                {
+                                                    push_ai_event(
+                                                        session_id,
+                                                        &AIEvent::ToolCall {
+                                                            name: format!("WRITE {}", path),
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
