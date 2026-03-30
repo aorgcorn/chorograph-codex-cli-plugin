@@ -10,6 +10,10 @@ jobs:
     runs-on: macos-14
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      download_url: ${{ steps.cdn_hash.outputs.download_url }}
+      sha256: ${{ steps.cdn_hash.outputs.sha256 }}
 
     steps:
       - uses: actions/checkout@v4
@@ -58,16 +62,93 @@ jobs:
 
           zip -r "${ZIP_NAME}" "${BUNDLE_DIR}"
 
-          CHECKSUM=$(shasum -a 256 "${ZIP_NAME}" | awk '{print $1}')
           echo "zip_name=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
-          echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract version from tag
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
+        id: release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.package.outputs.zip_name }}
-          body: |
-            ## SHA-256
-            `${{ steps.package.outputs.checksum }}`
+          body: "Release ${{ github.ref_name }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute canonical CDN SHA-256
+        id: cdn_hash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          PLUGIN_NAME="ChorographCodexCLIPlugin"
+          REPO="aorgcorn/chorograph-codex-cli-plugin"
+          ASSET="${PLUGIN_NAME}.bundle.zip"
+          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ASSET}"
+
+          # GitHub re-compresses uploads on the CDN. Re-download and retry until
+          # two consecutive fetches produce the same hash — that is the stable hash.
+          VERIFIED_ZIP=$(mktemp /tmp/${PLUGIN_NAME}-verify-XXXXXX.zip)
+          PREV_SHA=""
+          SHA=""
+          for i in 1 2 3 4 5; do
+            sleep 3
+            curl -L -s -o "${VERIFIED_ZIP}" "${DOWNLOAD_URL}"
+            SHA=$(shasum -a 256 "${VERIFIED_ZIP}" | awk '{print $1}')
+            echo "Attempt ${i}: ${SHA}"
+            if [ "${SHA}" = "${PREV_SHA}" ]; then
+              echo "Hash stabilised."
+              break
+            fi
+            PREV_SHA="${SHA}"
+          done
+          rm -f "${VERIFIED_ZIP}"
+
+          echo "download_url=${DOWNLOAD_URL}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+
+          # Update the release body with the canonical CDN hash.
+          gh release edit "v${VERSION}" \
+            --repo "${REPO}" \
+            --notes "## SHA-256
+          \`${SHA}\`"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-registry:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugin-registry
+        uses: actions/checkout@v4
+        with:
+          repository: aorgcorn/plugin-registry
+          token: ${{ secrets.REGISTRY_PAT }}
+
+      - name: Update registry entry
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.build-and-release.outputs.version }}"
+          DOWNLOAD_URL="${{ needs.build-and-release.outputs.download_url }}"
+          SHA256="${{ needs.build-and-release.outputs.sha256 }}"
+          PLUGIN_ID="com.chorograph.plugin.codex-cli"
+
+          jq --arg id "$PLUGIN_ID" \
+             --arg version "$VERSION" \
+             --arg url "$DOWNLOAD_URL" \
+             --arg sha "$SHA256" \
+             'map(if .id == $id then .version = $version | .wasm_url = $url | .sha256 = $sha else . end)' \
+             registry.json > registry.tmp.json
+          mv registry.tmp.json registry.json
+
+      - name: Commit and push
+        run: |
+          VERSION="${{ needs.build-and-release.outputs.version }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add registry.json
+          git commit -m "chore: update codex-cli plugin to v${VERSION}"
+          git push
