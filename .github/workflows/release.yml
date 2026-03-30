@@ -12,7 +12,7 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.meta.outputs.version }}
-      download_url: ${{ steps.cdn_hash.outputs.download_url }}
+      wasm_url: ${{ steps.cdn_hash.outputs.wasm_url }}
       sha256: ${{ steps.cdn_hash.outputs.sha256 }}
 
     steps:
@@ -21,11 +21,19 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Build release
+      - name: Install Rust wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build WASM
+        run: |
+          cargo build --release --target wasm32-unknown-unknown
+          cp target/wasm32-unknown-unknown/release/chorograph_codex_cli_plugin_rust.wasm \
+             chorograph_codex_cli_plugin_rust.wasm
+
+      - name: Build Swift bundle
         run: swift build -c release
 
       - name: Package bundle
-        id: package
         run: |
           set -euo pipefail
           PLUGIN_NAME="ChorographCodexCLIPlugin"
@@ -33,6 +41,7 @@ jobs:
           BUNDLE_DIR="${PLUGIN_NAME}.bundle"
           ZIP_NAME="${BUNDLE_DIR}.zip"
 
+          rm -rf "${BUNDLE_DIR}"
           mkdir -p "${BUNDLE_DIR}/Contents/MacOS"
           cp "${DYLIB}" "${BUNDLE_DIR}/Contents/MacOS/${PLUGIN_NAME}"
 
@@ -61,8 +70,7 @@ jobs:
           PLIST
 
           zip -r "${ZIP_NAME}" "${BUNDLE_DIR}"
-
-          echo "zip_name=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
+          rm -rf "${BUNDLE_DIR}"
 
       - name: Extract version from tag
         id: meta
@@ -71,10 +79,11 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        id: release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.package.outputs.zip_name }}
+          files: |
+            chorograph_codex_cli_plugin_rust.wasm
+            ChorographCodexCLIPlugin.bundle.zip
           body: "Release ${{ github.ref_name }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -84,20 +93,19 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
-          PLUGIN_NAME="ChorographCodexCLIPlugin"
           REPO="aorgcorn/chorograph-codex-cli-plugin"
-          ASSET="${PLUGIN_NAME}.bundle.zip"
-          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ASSET}"
+          WASM_ASSET="chorograph_codex_cli_plugin_rust.wasm"
+          WASM_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${WASM_ASSET}"
 
-          # GitHub re-compresses uploads on the CDN. Re-download and retry until
-          # two consecutive fetches produce the same hash — that is the stable hash.
-          VERIFIED_ZIP=$(mktemp /tmp/${PLUGIN_NAME}-verify-XXXXXX.zip)
+          # GitHub may serve a transitional copy on the first request.
+          # Re-fetch until two consecutive downloads produce the same hash.
+          VERIFIED=$(mktemp /tmp/codex-verify-XXXXXX.wasm)
           PREV_SHA=""
           SHA=""
           for i in 1 2 3 4 5; do
             sleep 3
-            curl -L -s -o "${VERIFIED_ZIP}" "${DOWNLOAD_URL}"
-            SHA=$(shasum -a 256 "${VERIFIED_ZIP}" | awk '{print $1}')
+            curl -L -s -o "${VERIFIED}" "${WASM_URL}"
+            SHA=$(shasum -a 256 "${VERIFIED}" | awk '{print $1}')
             echo "Attempt ${i}: ${SHA}"
             if [ "${SHA}" = "${PREV_SHA}" ]; then
               echo "Hash stabilised."
@@ -105,12 +113,11 @@ jobs:
             fi
             PREV_SHA="${SHA}"
           done
-          rm -f "${VERIFIED_ZIP}"
+          rm -f "${VERIFIED}"
 
-          echo "download_url=${DOWNLOAD_URL}" >> "$GITHUB_OUTPUT"
+          echo "wasm_url=${WASM_URL}" >> "$GITHUB_OUTPUT"
           echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
 
-          # Update the release body with the canonical CDN hash.
           gh release edit "v${VERSION}" \
             --repo "${REPO}" \
             --notes "## SHA-256
@@ -132,13 +139,13 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.build-and-release.outputs.version }}"
-          DOWNLOAD_URL="${{ needs.build-and-release.outputs.download_url }}"
+          WASM_URL="${{ needs.build-and-release.outputs.wasm_url }}"
           SHA256="${{ needs.build-and-release.outputs.sha256 }}"
           PLUGIN_ID="com.chorograph.plugin.codex-cli"
 
           jq --arg id "$PLUGIN_ID" \
              --arg version "$VERSION" \
-             --arg url "$DOWNLOAD_URL" \
+             --arg url "$WASM_URL" \
              --arg sha "$SHA256" \
              'map(if .id == $id then .version = $version | .wasm_url = $url | .sha256 = $sha else . end)' \
              registry.json > registry.tmp.json
