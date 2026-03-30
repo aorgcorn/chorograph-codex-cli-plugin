@@ -82,7 +82,10 @@ impl AIProvider for CodexCLI {
     }
 
     fn send_message(&self, session_id: &str, text: &str) -> Result<()> {
-        log!("[Codex Plugin] Spawning codex exec for engage: {}", text);
+        log!(
+            "[Codex Plugin] Spawning codex exec for session={}",
+            session_id
+        );
         let child = match ChildProcess::spawn(
             "codex",
             vec![
@@ -156,7 +159,6 @@ impl AIProvider for CodexCLI {
                                     } else if item_type == Some("reasoning") {
                                         if let Some(msg) = item.get("text").and_then(|t| t.as_str())
                                         {
-                                            // Send as proper Reasoning event for in-place replacement in UI
                                             push_ai_event(
                                                 session_id,
                                                 &AIEvent::Reasoning {
@@ -166,9 +168,10 @@ impl AIProvider for CodexCLI {
                                             );
                                         }
                                     } else if item_type == Some("file_change") {
-                                        // Codex emits file_change items when it writes files.
-                                        // Emit a WRITE tool-call event for each changed path so
-                                        // the activity log shows a green WRITE row.
+                                        // Codex has written files to disk.  Emit a ToolCall for the
+                                        // activity log AND a CrdtWrite so the host captures the
+                                        // content into the CRDT VFS as a speculative write that the
+                                        // user can approve or reject from the canvas overlay card.
                                         if let Some(changes) =
                                             item.get("changes").and_then(|c| c.as_array())
                                         {
@@ -182,6 +185,26 @@ impl AIProvider for CodexCLI {
                                                             name: format!("WRITE {}", path),
                                                         },
                                                     );
+                                                    match read_host_file(path) {
+                                                        Ok(content) => {
+                                                            push_ai_event(
+                                                                session_id,
+                                                                &AIEvent::CrdtWrite {
+                                                                    session_id: session_id
+                                                                        .to_string(),
+                                                                    path: path.to_string(),
+                                                                    content,
+                                                                },
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            log!(
+                                                                "[Codex Plugin] Failed to read file {} for CrdtWrite: {:?}",
+                                                                path,
+                                                                e
+                                                            );
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -226,236 +249,6 @@ impl AIProvider for CodexCLI {
     }
 }
 
-impl CodexCLI {
-    fn send_plan(&self, session_id: &str, text: &str) -> Result<()> {
-        log!(
-            "[Codex Plugin] send_plan session={} prompt={}",
-            session_id,
-            text
-        );
-
-        let plan_prompt = format!(
-            "Analyze the task: {}. \n\n\
-            Respond in two clear parts:\n\
-            1. A detailed Markdown summary of your plan using headings (###), bullet points, and paragraphs with empty lines between them.\n\
-            2. A single JSON array of ALL relevant relative file paths (both to read and to modify) at the very end.\n\n\
-            Example format:\n\
-            ### Summary\n\
-            I will analyze the project...\n\n\
-            ### Tasks\n\
-            - Step 1...\n\
-            - Step 2...\n\n\
-            [\"file1.swift\", \"file2.swift\"]", 
-            text
-        );
-
-        push_ai_event(
-            session_id,
-            &AIEvent::Info {
-                message: "Generating plan via Codex...".to_string(),
-            },
-        );
-
-        let child = match ChildProcess::spawn(
-            "codex",
-            vec![
-                "exec",
-                "--json",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--skip-git-repo-check",
-                &plan_prompt,
-            ],
-            None,
-            std::collections::HashMap::new(),
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                log!("[Codex Plugin] Failed to spawn codex for plan: {:?}", e);
-                push_ai_event(
-                    session_id,
-                    &AIEvent::Error {
-                        message: format!("Failed to spawn codex: {:?}", e),
-                    },
-                );
-                push_ai_event(
-                    session_id,
-                    &AIEvent::TurnCompleted {
-                        session_id: session_id.to_string(),
-                    },
-                );
-                return Err(e);
-            }
-        };
-
-        let mut buffer = Vec::new();
-        let mut full_response = String::new();
-
-        log!("[Codex Plugin] waiting for plan data...");
-        while child.wait_for_data(60000) {
-            if let Ok(ReadResult::Data(err_data)) = child.read(PipeType::Stderr) {
-                if !err_data.is_empty() {
-                    let err_msg = String::from_utf8_lossy(&err_data);
-                    log!("[Codex Plugin] Plan Stderr: {}", err_msg);
-                }
-            }
-
-            match child.read(PipeType::Stdout)? {
-                ReadResult::Data(data) => {
-                    log!("[Codex Plugin] Plan read {} bytes", data.len());
-                    buffer.extend(data);
-                    while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
-                        let line = buffer.drain(..=pos).collect::<Vec<_>>();
-                        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&line) {
-                            let event_type = val.get("type").and_then(|t| t.as_str());
-
-                            // command_execution items are intercepted by chorograph-shim at the
-                            // bash level and streamed line-by-line via the Unix socket — no need
-                            // to forward them here.
-                            if event_type == Some("item.completed") {
-                                if let Some(item) = val.get("item") {
-                                    let item_type = item.get("type").and_then(|t| t.as_str());
-                                    if item_type == Some("agent_message") {
-                                        if let Some(msg) = item.get("text").and_then(|t| t.as_str())
-                                        {
-                                            full_response.push_str(msg);
-                                            push_ai_event(
-                                                session_id,
-                                                &AIEvent::StreamingDelta {
-                                                    session_id: session_id.to_string(),
-                                                    text: msg.to_string(),
-                                                },
-                                            );
-                                        }
-                                    } else if item_type == Some("reasoning") {
-                                        if let Some(msg) = item.get("text").and_then(|t| t.as_str())
-                                        {
-                                            // Send as proper Reasoning event for in-place replacement in UI
-                                            push_ai_event(
-                                                session_id,
-                                                &AIEvent::Reasoning {
-                                                    session_id: session_id.to_string(),
-                                                    text: msg.trim_matches('*').trim().to_string(),
-                                                },
-                                            );
-                                        }
-                                    } else if item_type == Some("file_change") {
-                                        // During the plan phase, Codex has already written the file
-                                        // to disk. We read it back and emit a CrdtWrite event so the
-                                        // host can capture the content into the CRDT VFS as a
-                                        // speculative (ghost) write that the user can approve or reject.
-                                        if let Some(changes) =
-                                            item.get("changes").and_then(|c| c.as_array())
-                                        {
-                                            for change in changes {
-                                                if let Some(path) =
-                                                    change.get("path").and_then(|p| p.as_str())
-                                                {
-                                                    // Emit a ToolCall so the activity log shows the write
-                                                    push_ai_event(
-                                                        session_id,
-                                                        &AIEvent::ToolCall {
-                                                            name: format!("WRITE {}", path),
-                                                        },
-                                                    );
-                                                    // Read the file Codex just wrote and forward
-                                                    // content to the host CRDT layer
-                                                    match read_host_file(path) {
-                                                        Ok(content) => {
-                                                            push_ai_event(
-                                                                session_id,
-                                                                &AIEvent::CrdtWrite {
-                                                                    session_id: session_id
-                                                                        .to_string(),
-                                                                    path: path.to_string(),
-                                                                    content,
-                                                                },
-                                                            );
-                                                        }
-                                                        Err(e) => {
-                                                            log!(
-                                                                "[Codex Plugin] Failed to read file {} for CrdtWrite: {:?}",
-                                                                path,
-                                                                e
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                ReadResult::EOF => {
-                    log!("[Codex Plugin] Plan Stdout EOF");
-                    break;
-                }
-                ReadResult::Empty => continue,
-            }
-        }
-
-        log!(
-            "[Codex Plugin] Plan extraction. Response len: {}",
-            full_response.len()
-        );
-        let files = self.extract_files(&full_response);
-        log!("[Codex Plugin] Extracted {} files", files.len());
-        if !files.is_empty() {
-            push_ai_event(
-                session_id,
-                &AIEvent::PlanGenerated {
-                    session_id: session_id.to_string(),
-                    files,
-                },
-            );
-        } else {
-            log!("[Codex Plugin] Warning: No files extracted from plan response");
-            push_ai_event(
-                session_id,
-                &AIEvent::Info {
-                    message: "No files identified in the plan.".to_string(),
-                },
-            );
-        }
-
-        push_ai_event(
-            session_id,
-            &AIEvent::TurnCompleted {
-                session_id: session_id.to_string(),
-            },
-        );
-
-        Ok(())
-    }
-
-    fn extract_files(&self, response: &str) -> Vec<String> {
-        if let Some(last_start) = response.rfind('[') {
-            if let Some(last_end) = response.rfind(']') {
-                if last_end > last_start {
-                    let json_part = &response[last_start..=last_end];
-                    if let Ok(files) = serde_json::from_str::<Vec<String>>(json_part) {
-                        return files;
-                    }
-                }
-            }
-        }
-
-        if let Some(start) = response.find('[') {
-            if let Some(end) = response.find(']') {
-                if end > start {
-                    let json_part = &response[start..=end];
-                    if let Ok(files) = serde_json::from_str::<Vec<String>>(json_part) {
-                        return files;
-                    }
-                }
-            }
-        }
-        Vec::new()
-    }
-}
-
 #[chorograph_plugin]
 pub fn init() {
     let ui = json!([
@@ -478,9 +271,14 @@ pub fn handle_action(action_id: String, payload: serde_json::Value) {
 
     if action_id == "send_test" {
         let _ = provider.send_message("test-session", "echo Ported to Rust WASM!");
-    } else if action_id == "plan" || action_id == "engage" {
-        // Both "plan" and "engage" use the messages-array protocol (same as "chat"/"reply").
-        // The old flat "prompt" field is no longer sent by the host.
+    } else if action_id == "chat"
+        || action_id == "reply"
+        || action_id == "plan"
+        || action_id == "engage"
+    {
+        // All action variants use the same messages-array protocol.
+        // Every turn is speculative: CrdtWrite events are always emitted so the
+        // host shows overlay cards on the canvas for user approval/discard.
         if let Some(session_id) = payload.get("session_id").and_then(|s| s.as_str()) {
             let messages = payload
                 .get("messages")
@@ -498,45 +296,12 @@ pub fn handle_action(action_id: String, payload: serde_json::Value) {
             if !last_user_text.is_empty() {
                 let history = provider.format_history(messages);
                 let final_prompt = format!("{}{}{}", last_user_text, history, context);
-                if action_id == "plan" {
-                    let _ = provider.send_plan(session_id, &final_prompt);
-                } else {
-                    let _ = provider.send_message(session_id, &final_prompt);
-                }
-            } else {
-                log!("[Codex Plugin] plan/engage: no user message found in payload");
-            }
-        }
-    } else if action_id == "chat" || action_id == "reply" {
-        // New conversation protocol: payload carries a `messages` array and optional `skeletons`.
-        // For "reply" (follow-up turn) we prepend the full conversation history so the model
-        // has context of what was already said and done.
-        if let Some(session_id) = payload.get("session_id").and_then(|s| s.as_str()) {
-            let messages = payload
-                .get("messages")
-                .and_then(|m| m.as_array())
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
-
-            let last_user_text = messages
-                .iter()
-                .rev()
-                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-                .and_then(|m| m.get("text").and_then(|t| t.as_str()))
-                .unwrap_or("");
-
-            if !last_user_text.is_empty() {
-                // For follow-up turns, prepend the conversation history so the model
-                // knows what it already said and did.
-                let history = if action_id == "reply" {
-                    provider.format_history(messages)
-                } else {
-                    String::new()
-                };
-                let final_prompt = format!("{}{}{}", last_user_text, history, context);
                 let _ = provider.send_message(session_id, &final_prompt);
             } else {
-                log!("[Codex Plugin] chat/reply: no user message found in payload");
+                log!(
+                    "[Codex Plugin] {}: no user message found in payload",
+                    action_id
+                );
             }
         }
     }
