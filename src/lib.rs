@@ -179,30 +179,48 @@ impl AIProvider for CodexCLI {
                                                 if let Some(path) =
                                                     change.get("path").and_then(|p| p.as_str())
                                                 {
+                                                    let kind = change
+                                                        .get("kind")
+                                                        .and_then(|k| k.as_str())
+                                                        .unwrap_or("update");
                                                     push_ai_event(
                                                         session_id,
                                                         &AIEvent::ToolCall {
                                                             name: format!("WRITE {}", path),
                                                         },
                                                     );
-                                                    match read_host_file(path) {
-                                                        Ok(content) => {
-                                                            push_ai_event(
-                                                                session_id,
-                                                                &AIEvent::CrdtWrite {
-                                                                    session_id: session_id
-                                                                        .to_string(),
-                                                                    path: path.to_string(),
-                                                                    content,
-                                                                },
-                                                            );
-                                                        }
-                                                        Err(e) => {
-                                                            log!(
-                                                                "[Codex Plugin] Failed to read file {} for CrdtWrite: {:?}",
-                                                                path,
-                                                                e
-                                                            );
+                                                    if kind == "delete" {
+                                                        // File has been deleted — emit CrdtWrite
+                                                        // with empty content so the host can show
+                                                        // a DEL row in the speculative overlay.
+                                                        push_ai_event(
+                                                            session_id,
+                                                            &AIEvent::CrdtWrite {
+                                                                session_id: session_id.to_string(),
+                                                                path: path.to_string(),
+                                                                content: String::new(),
+                                                            },
+                                                        );
+                                                    } else {
+                                                        match read_host_file(path) {
+                                                            Ok(content) => {
+                                                                push_ai_event(
+                                                                    session_id,
+                                                                    &AIEvent::CrdtWrite {
+                                                                        session_id: session_id
+                                                                            .to_string(),
+                                                                        path: path.to_string(),
+                                                                        content,
+                                                                    },
+                                                                );
+                                                            }
+                                                            Err(e) => {
+                                                                log!(
+                                                                    "[Codex Plugin] Failed to read file {} for CrdtWrite: {:?}",
+                                                                    path,
+                                                                    e
+                                                                );
+                                                            }
                                                         }
                                                     }
                                                 }
